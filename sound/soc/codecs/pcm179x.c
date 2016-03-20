@@ -20,6 +20,7 @@
 #include <linux/slab.h>
 #include <linux/kernel.h>
 #include <linux/device.h>
+#include <linux/delay.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
 
@@ -101,6 +102,7 @@ static int pcm179x_startup(struct snd_pcm_substream *substream,
 	snd_pcm_hw_constraint_mask64(substream->runtime,
 				     SNDRV_PCM_HW_PARAM_FORMAT, formats);
 
+	msleep(50);
 	return 0;
 }
 
