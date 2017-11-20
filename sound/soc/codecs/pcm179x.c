@@ -38,6 +38,7 @@
 #define PCM179X_DAC_VOL_RIGHT	0x11
 #define PCM179X_FMT_CONTROL	0x12
 #define PCM179X_MODE_CONTROL	0x13
+#define PCM179X_CONF_CONTROL	0x14
 #define PCM179X_SOFT_MUTE	PCM179X_FMT_CONTROL
 
 #define PCM179X_FMT_MASK	0x70
@@ -45,6 +46,21 @@
 #define PCM179X_MUTE_MASK	0x01
 #define PCM179X_MUTE_SHIFT	0
 #define PCM179X_ATLD_ENABLE	(1 << 7)
+#define PCM179X_DSD_ENABLE	(1 << 5)
+#define PCM179x_CODEC_RST	(1 << 6)
+#define PCM179X_DSD_FILTER(X)	(((X) & 0x3) << 2)
+
+
+#define CLK2		(1 << 0)
+#define CLK1		(1 << 1)
+#define CLK0		(1 << 2)
+#define W32		(1 << 3)
+#define DSD_EN		(1 << 4)
+#define SPDIF_IN	(1 << 5)
+#define SPDIF_SEL	(1 << 6)
+
+#define	DACMAX_SPEED_MAX	0xff
+#define DACMAX_CLOCK		0x20
 
 static const struct reg_default pcm179x_reg_defaults[] = {
 	{ 0x10, 0xff },
@@ -55,14 +71,15 @@ static const struct reg_default pcm179x_reg_defaults[] = {
 	{ 0x15, 0x01 },
 	{ 0x16, 0x00 },
 	{ 0x17, 0x00 },
+	{ 0x20, 0x00 },
 };
 
 static bool pcm179x_accessible_reg(struct device *dev, unsigned int reg)
 {
-	return reg >= 0x10 && reg <= 0x17;
+	return (reg >= 0x10 && reg <= 0x17) || reg == 0x20;
 }
 
-static bool pcm179x_writeable_reg(struct device *dev, unsigned int reg)
+static bool pcm179x_writeable_reg(struct device *dev, unsigned register reg)
 {
 	bool accessible;
 
@@ -72,7 +89,7 @@ static bool pcm179x_writeable_reg(struct device *dev, unsigned int reg)
 }
 
 enum pcm179x_type {
-	PCM1792A,
+	PCM1792A = 1,
 	PCM1795,
 	PCM1796,
 };
@@ -81,6 +98,9 @@ struct pcm179x_private {
 	struct regmap *regmap;
 	unsigned int format;
 	unsigned int rate;
+	unsigned int dsd_mode;
+	unsigned int is_mute;
+	u8 dacmax_register;
 	enum pcm179x_type codec_model;
 };
 
@@ -89,18 +109,19 @@ static int pcm179x_startup(struct snd_pcm_substream *substream,
 {
 	struct snd_soc_codec *codec = dai->codec;
 	struct pcm179x_private *priv = snd_soc_codec_get_drvdata(codec);
-	u64 formats = PCM1792A_FORMATS;
+	u64 formats = PCM1795_FORMATS;
 
 	switch (priv->codec_model) {
-	case PCM1795:
-		formats = PCM1795_FORMATS;
+	case PCM1792A:
+		formats = PCM1792A_FORMATS;
 		break;
 	default:
 		break;
 	}
 
-	snd_pcm_hw_constraint_mask64(substream->runtime,
-				     SNDRV_PCM_HW_PARAM_FORMAT, formats);
+	if (formats != PCM1795_FORMATS)
+		snd_pcm_hw_constraint_mask64(substream->runtime,
+					     SNDRV_PCM_HW_PARAM_FORMAT, formats);
 
 	msleep(50);
 	return 0;
@@ -121,7 +142,23 @@ static int pcm179x_digital_mute(struct snd_soc_dai *dai, int mute)
 {
 	struct snd_soc_codec *codec = dai->codec;
 	struct pcm179x_private *priv = snd_soc_codec_get_drvdata(codec);
+	int spdif_enable = !!(priv->dacmax_register & SPDIF_IN);
 	int ret;
+
+	pr_info("%s: mute %d dsd %d\n", __func__, mute, priv->dsd_mode);
+
+	priv->is_mute = mute;
+
+	if (spdif_enable && mute)
+		return 0;
+
+	if (priv->dsd_mode && mute) {
+		ret = regmap_update_bits(priv->regmap, PCM179X_CONF_CONTROL,
+					 PCM179X_DSD_ENABLE, 0);
+
+		if (ret < 0)
+			return ret;
+	}
 
 	ret = regmap_update_bits(priv->regmap, PCM179X_SOFT_MUTE,
 				 PCM179X_MUTE_MASK, !!mute);
@@ -137,9 +174,60 @@ static int pcm179x_hw_params(struct snd_pcm_substream *substream,
 {
 	struct snd_soc_codec *codec = dai->codec;
 	struct pcm179x_private *priv = snd_soc_codec_get_drvdata(codec);
-	int val = 0, ret;
+	unsigned int val = 0, ret;
+	unsigned int dsd = 0;
+	unsigned int mask = PCM179X_FMT_MASK | PCM179X_ATLD_ENABLE;
 
 	priv->rate = params_rate(params);
+	switch (priv->rate) {
+	case 44100:
+		break;
+	case 48000:
+		val |= CLK0;
+		break;
+	case 88200:
+		val |= CLK1;
+		break;
+	case 96000:
+		val |= (CLK1 | CLK0);
+		break;
+	case 176400:
+		val |= (CLK2 | CLK1);
+		break;
+	case 192000:
+		val |= (CLK2 | CLK0 | CLK1);
+		break;
+	case 352800:
+		/* This rate works only for DSD format */
+		if (params_format(params) !=
+		    SNDRV_PCM_FORMAT_DSD_U16_LE)
+			return -EINVAL;
+
+		val |= (CLK2 | CLK1);
+		val |= W32;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	switch (params_format(params)) {
+	case SNDRV_PCM_FORMAT_DSD_U16_LE:
+		val |= DSD_EN;
+		break;
+	case SNDRV_PCM_FORMAT_S16_LE:
+		break;
+	case SNDRV_PCM_FORMAT_S24_LE:
+	case SNDRV_PCM_FORMAT_S32_LE:
+		val |= W32;
+		break;
+	}
+
+	priv->dacmax_register &= (SPDIF_IN | SPDIF_SEL);
+	priv->dacmax_register |=  val;
+	ret = regmap_update_bits(priv->regmap, DACMAX_CLOCK,
+				 0xff, priv->dacmax_register);
+	if (ret < 0)
+		return ret;
 
 	switch (priv->format & SND_SOC_DAIFMT_FORMAT_MASK) {
 	case SND_SOC_DAIFMT_RIGHT_J:
@@ -179,8 +267,28 @@ static int pcm179x_hw_params(struct snd_pcm_substream *substream,
 
 	val = val << PCM179X_FMT_SHIFT | PCM179X_ATLD_ENABLE;
 
+	mask |= PCM179X_DSD_FILTER(3);
+
+	switch (params_format(params)) {
+	case SNDRV_PCM_FORMAT_DSD_U16_LE:
+		dsd = PCM179X_DSD_ENABLE;
+		val = PCM179X_DSD_FILTER(2);
+		priv->dsd_mode = 1;
+		break;
+	default:
+		priv->dsd_mode = 0;
+	}
+
+	pr_debug("%s: dsd enable %d\n", __func__, priv->dsd_mode);
+
 	ret = regmap_update_bits(priv->regmap, PCM179X_FMT_CONTROL,
-				 PCM179X_FMT_MASK | PCM179X_ATLD_ENABLE, val);
+				 mask, val);
+	if (ret < 0)
+		return ret;
+
+	ret = regmap_update_bits(priv->regmap, PCM179X_CONF_CONTROL,
+				 PCM179X_DSD_ENABLE, dsd);
+
 	if (ret < 0)
 		return ret;
 
@@ -194,6 +302,72 @@ static const struct snd_soc_dai_ops pcm179x_dai_ops = {
 	.digital_mute	= pcm179x_digital_mute,
 };
 
+static int spdif_get_input(struct snd_kcontrol *kcontrol,
+		struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *c = snd_soc_kcontrol_component(kcontrol);
+        struct pcm179x_private *priv = snd_soc_component_get_drvdata(c);
+
+	ucontrol->value.integer.value[0] = !!(priv->dacmax_register & SPDIF_SEL);
+	return 0;
+}
+
+static int spdif_put_input(struct snd_kcontrol *kcontrol,
+		struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *c = snd_soc_kcontrol_component(kcontrol);
+        struct pcm179x_private *priv = snd_soc_component_get_drvdata(c);
+	int saved_value = !!(priv->dacmax_register & SPDIF_SEL);
+
+	if (saved_value == ucontrol->value.integer.value[0])
+		return 0;
+
+	if (ucontrol->value.integer.value[0])
+		priv->dacmax_register |= SPDIF_SEL;
+	else
+		priv->dacmax_register &= ~SPDIF_SEL;
+
+	return 1;
+}
+
+
+static int spdif_switch_get(struct snd_kcontrol *kcontrol,
+		struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *c = snd_soc_kcontrol_component(kcontrol);
+        struct pcm179x_private *priv = snd_soc_component_get_drvdata(c);
+
+	ucontrol->value.integer.value[0] = !!(priv->dacmax_register & SPDIF_IN);
+	return 0;
+}
+
+static int spdif_switch_put(struct snd_kcontrol *kcontrol,
+		struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *c = snd_soc_kcontrol_component(kcontrol);
+        struct pcm179x_private *priv = snd_soc_component_get_drvdata(c);
+	int saved_value = !!(priv->dacmax_register & SPDIF_IN);
+
+	if (saved_value == ucontrol->value.integer.value[0])
+		return 0;
+
+	if (ucontrol->value.integer.value[0])
+		priv->dacmax_register |= SPDIF_IN;
+	else
+		priv->dacmax_register &= ~SPDIF_IN;
+
+	if (priv->dsd_mode)
+		regmap_update_bits(priv->regmap, PCM179X_CONF_CONTROL,
+				 PCM179X_DSD_ENABLE, !ucontrol->value.integer.value[0]);
+
+	regmap_update_bits(priv->regmap, DACMAX_CLOCK,
+			 0xff, priv->dacmax_register);
+
+	regmap_update_bits(priv->regmap, PCM179X_SOFT_MUTE,
+			 PCM179X_MUTE_MASK, priv->is_mute & (!saved_value));
+	return 1;
+}
+
 static const DECLARE_TLV_DB_SCALE(pcm179x_dac_tlv, -12000, 50, 1);
 
 static const struct snd_kcontrol_new pcm179x_controls[] = {
@@ -202,6 +376,11 @@ static const struct snd_kcontrol_new pcm179x_controls[] = {
 			 pcm179x_dac_tlv),
 	SOC_SINGLE("DAC Invert Output Switch", PCM179X_MODE_CONTROL, 7, 1, 0),
 	SOC_SINGLE("DAC Rolloff Filter Switch", PCM179X_MODE_CONTROL, 1, 1, 0),
+	/* SPDIF control */
+	SOC_SINGLE_BOOL_EXT("SPDIF Input Switch", 0,
+			spdif_switch_get, spdif_switch_put),
+	SOC_SINGLE_BOOL_EXT("SPDIF Select Switch", 0,
+			spdif_get_input, spdif_put_input),
 };
 
 static const struct snd_soc_dapm_widget pcm179x_dapm_widgets[] = {
@@ -226,15 +405,15 @@ static struct snd_soc_dai_driver pcm179x_dai = {
 		.channels_max = 2,
 		.rates = SNDRV_PCM_RATE_CONTINUOUS,
 		.rate_min = 10000,
-		.rate_max = 200000,
-		.formats = PCM179X_FORMATS, },
+		.rate_max = 352800,
+		.formats = PCM1795_FORMATS, },
 	.ops = &pcm179x_dai_ops,
 };
 
 const struct regmap_config pcm179x_regmap_config = {
 	.reg_bits		= 8,
 	.val_bits		= 8,
-	.max_register		= 23,
+	.max_register		= 32,
 	.reg_defaults		= pcm179x_reg_defaults,
 	.num_reg_defaults	= ARRAY_SIZE(pcm179x_reg_defaults),
 	.writeable_reg		= pcm179x_writeable_reg,
@@ -250,13 +429,13 @@ static const struct snd_soc_codec_driver soc_codec_dev_pcm179x = {
 		.num_dapm_widgets	= ARRAY_SIZE(pcm179x_dapm_widgets),
 		.dapm_routes		= pcm179x_dapm_routes,
 		.num_dapm_routes	= ARRAY_SIZE(pcm179x_dapm_routes),
-	},
+	}
 };
 
 const struct of_device_id pcm179x_of_match[] = {
-	{ .compatible = "ti,pcm1792a", },
-	{ .compatible = "ti,pcm1795", .data = (void *)PCM1795, },
-	{ .compatible = "ti,pcm1796", },
+	{ .compatible = "ti,pcm1792a", .data = (void *)PCM1792A },
+	{ .compatible = "ti,pcm1795", .data = (void *)PCM1795 },
+	{ .compatible = "ti,pcm1796", .data = (void *)PCM1792A },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, pcm179x_of_match);
@@ -266,7 +445,7 @@ int pcm179x_common_init(struct device *dev, struct regmap *regmap)
 {
 	struct pcm179x_private *pcm179x;
 	struct device_node *np = dev->of_node;
-	enum pcm179x_type codec_model = PCM1792A;
+	enum pcm179x_type codec_model = PCM1795;
 
 	pcm179x = devm_kzalloc(dev, sizeof(struct pcm179x_private),
 				GFP_KERNEL);
@@ -285,6 +464,7 @@ int pcm179x_common_init(struct device *dev, struct regmap *regmap)
 		pcm179x->codec_model =  codec_model;
 
 	pcm179x->regmap = regmap;
+	pcm179x->is_mute = 1;
 	dev_set_drvdata(dev, pcm179x);
 
 	return snd_soc_register_codec(dev,

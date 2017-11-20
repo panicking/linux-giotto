@@ -22,7 +22,8 @@
 
 #define PCM1792A_FORMATS (SNDRV_PCM_FMTBIT_S24_LE | SNDRV_PCM_FMTBIT_S16_LE)
 
-#define PCM1795_FORMATS (SNDRV_PCM_FMTBIT_S32_LE | SNDRV_PCM_FMTBIT_S24_LE)
+#define PCM1795_FORMATS (SNDRV_PCM_FMTBIT_S32_LE | \
+			 SNDRV_PCM_FMTBIT_DSD_U16_LE)
 
 extern const struct regmap_config pcm179x_regmap_config;
 extern const struct of_device_id pcm179x_of_match[];
