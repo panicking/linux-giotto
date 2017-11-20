@@ -191,6 +191,14 @@ config SND_BCM2708_SOC_FE_PI_AUDIO
 	help
 	  Say Y or M if you want to add support for Fe-Pi-Audio.
 
+config SND_BCM2708_SOC_GIOTTO
+	tristate "SoC Audio support for GIOTTO boards using a pcm1792 codec"
+	depends on SND_BCM2708_SOC_I2S || SND_BCM2835_SOC_I2S
+	select SND_SOC_PCM179X_SPI
+	help
+	  Say Y or M here if you want to add support for SoC audio on Dacmax
+	  boards using the pcm1792a codec.
+
 config SND_PISOUND
 	tristate "Support for Blokas Labs pisound"
 	depends on SND_BCM2708_SOC_I2S || SND_BCM2835_SOC_I2S
