@@ -776,7 +776,8 @@ static struct snd_soc_dai_driver bcm2835_i2s_dai = {
 		.rates =	SNDRV_PCM_RATE_CONTINUOUS,
 		.rate_min =	8000,
 		.rate_max =	384000,
-		.formats =	SNDRV_PCM_FMTBIT_S16_LE
+		.formats =	SNDRV_PCM_FMTBIT_DSD_U16_LE
+				| SNDRV_PCM_FMTBIT_S16_LE
 				| SNDRV_PCM_FMTBIT_S24_LE
 				| SNDRV_PCM_FMTBIT_S32_LE
 		},
