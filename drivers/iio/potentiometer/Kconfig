@@ -55,6 +55,16 @@ config MCP4131
 	  To compile this driver as a module, choose M here: the
 	  module will be called mcp4131.
 
+config DS1807
+	tristate "Maxim Integrated DS1807 Digital Potentiometer driver"
+	depends on I2C
+	help
+	  Say yes here to build support for the Maxim Integrated DS1807
+	  digital potentiometer chip. Value are reported back in DBm
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called ds1807.
+
 config MCP4531
 	tristate "Microchip MCP45xx/MCP46xx Digital Potentiometer driver"
 	depends on I2C
