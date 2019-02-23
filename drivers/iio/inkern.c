@@ -843,12 +843,34 @@ err_unlock:
 }
 EXPORT_SYMBOL_GPL(iio_get_channel_type);
 
-static int iio_channel_write(struct iio_channel *chan, int val, int val2,
+static int iio_channel_write(struct iio_channel *chan, int index, int val, int val2,
 			     enum iio_chan_info_enum info)
 {
 	return chan->indio_dev->info->write_raw(chan->indio_dev,
-						chan->channel, val, val2, info);
+						&chan->channel[index], val, val2, info);
 }
+
+int iio_write_channel_attribute(struct iio_channel *chan, int index, int val, int val2,
+                                enum iio_chan_info_enum attribute)
+{
+	int ret;
+
+	mutex_lock(&chan->indio_dev->info_exist_lock);
+	if (chan->indio_dev->info == NULL) {
+		ret = -ENODEV;
+		goto err_unlock;
+	}
+
+	if (index < 0 || index > chan->indio_dev->num_channels)
+		return -EINVAL;
+
+	ret = iio_channel_write(chan, index, val, val2, attribute);
+err_unlock:
+	mutex_unlock(&chan->indio_dev->info_exist_lock);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(iio_write_channel_attribute);
 
 int iio_write_channel_raw(struct iio_channel *chan, int val)
 {
@@ -860,7 +882,7 @@ int iio_write_channel_raw(struct iio_channel *chan, int val)
 		goto err_unlock;
 	}
 
-	ret = iio_channel_write(chan, val, 0, IIO_CHAN_INFO_RAW);
+	ret = iio_channel_write(chan, 0, val, 0, IIO_CHAN_INFO_RAW);
 err_unlock:
 	mutex_unlock(&chan->indio_dev->info_exist_lock);
 
