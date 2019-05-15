@@ -198,12 +198,15 @@ static int pcm179x_hw_params(struct snd_pcm_substream *substream,
 		val |= (CLK2 | CLK0 | CLK1);
 		break;
 	case 352800:
+		val |= CLK2;
+	case 705600:
+		val |= CLK1;
+
 		/* This rate works only for DSD format */
 		if (params_format(params) !=
 		    SNDRV_PCM_FORMAT_DSD_U16_LE)
 			return -EINVAL;
 
-		val |= (CLK2 | CLK1);
 		val |= W32;
 		break;
 	default:
@@ -405,7 +408,7 @@ static struct snd_soc_dai_driver pcm179x_dai = {
 		.channels_max = 2,
 		.rates = SNDRV_PCM_RATE_CONTINUOUS,
 		.rate_min = 10000,
-		.rate_max = 352800,
+		.rate_max = 705600,
 		.formats = PCM1795_FORMATS, },
 	.ops = &pcm179x_dai_ops,
 };
