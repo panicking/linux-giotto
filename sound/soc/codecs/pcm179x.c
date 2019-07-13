@@ -100,7 +100,9 @@ struct pcm179x_private {
 	unsigned int rate;
 	unsigned int dsd_mode;
 	unsigned int is_mute;
-	u8 dacmax_register;
+	unsigned int dacmax_register;
+	unsigned int dacmax_format;
+	unsigned int dacmax_mask;
 	enum pcm179x_type codec_model;
 };
 
@@ -149,7 +151,7 @@ static int pcm179x_digital_mute(struct snd_soc_dai *dai, int mute)
 
 	priv->is_mute = mute;
 
-	if (spdif_enable && mute)
+	if (spdif_enable)
 		return 0;
 
 	if (priv->dsd_mode && mute) {
@@ -177,6 +179,7 @@ static int pcm179x_hw_params(struct snd_pcm_substream *substream,
 	unsigned int val = 0, ret;
 	unsigned int dsd = 0;
 	unsigned int mask = PCM179X_FMT_MASK | PCM179X_ATLD_ENABLE;
+	int spdif_enable;
 
 	priv->rate = params_rate(params);
 	switch (priv->rate) {
@@ -227,6 +230,12 @@ static int pcm179x_hw_params(struct snd_pcm_substream *substream,
 
 	priv->dacmax_register &= (SPDIF_IN | SPDIF_SEL);
 	priv->dacmax_register |=  val;
+
+	pr_debug("%s: val %d dacmax_register %d\n", __func__,
+		(unsigned int)val, (unsigned int)priv->dacmax_register);
+
+	spdif_enable = !!(priv->dacmax_register & SPDIF_IN);
+
 	ret = regmap_update_bits(priv->regmap, DACMAX_CLOCK,
 				 0xff, priv->dacmax_register);
 	if (ret < 0)
@@ -284,6 +293,12 @@ static int pcm179x_hw_params(struct snd_pcm_substream *substream,
 
 	pr_debug("%s: dsd enable %d\n", __func__, priv->dsd_mode);
 
+	priv->dacmax_format = val;
+	priv->dacmax_mask = mask;
+
+	if (spdif_enable)
+		return 0;
+
 	ret = regmap_update_bits(priv->regmap, PCM179X_FMT_CONTROL,
 				 mask, val);
 	if (ret < 0)
@@ -320,15 +335,17 @@ static int spdif_put_input(struct snd_kcontrol *kcontrol,
 {
 	struct snd_soc_component *c = snd_soc_kcontrol_component(kcontrol);
         struct pcm179x_private *priv = snd_soc_component_get_drvdata(c);
-	int saved_value = !!(priv->dacmax_register & SPDIF_SEL);
-
-	if (saved_value == ucontrol->value.integer.value[0])
-		return 0;
+	int ret;
 
 	if (ucontrol->value.integer.value[0])
 		priv->dacmax_register |= SPDIF_SEL;
 	else
 		priv->dacmax_register &= ~SPDIF_SEL;
+
+	ret = regmap_update_bits(priv->regmap, DACMAX_CLOCK,
+				 0xff, priv->dacmax_register);
+	if (ret < 0)
+		return ret;
 
 	return 1;
 }
@@ -349,25 +366,40 @@ static int spdif_switch_put(struct snd_kcontrol *kcontrol,
 {
 	struct snd_soc_component *c = snd_soc_kcontrol_component(kcontrol);
         struct pcm179x_private *priv = snd_soc_component_get_drvdata(c);
-	int saved_value = !!(priv->dacmax_register & SPDIF_IN);
-
-	if (saved_value == ucontrol->value.integer.value[0])
-		return 0;
+	int ret;
+	unsigned int dsd = priv->dsd_mode ? PCM179X_DSD_ENABLE : 0;
 
 	if (ucontrol->value.integer.value[0])
 		priv->dacmax_register |= SPDIF_IN;
 	else
 		priv->dacmax_register &= ~SPDIF_IN;
 
-	if (priv->dsd_mode)
-		regmap_update_bits(priv->regmap, PCM179X_CONF_CONTROL,
-				 PCM179X_DSD_ENABLE, !ucontrol->value.integer.value[0]);
+	ret = regmap_update_bits(priv->regmap, DACMAX_CLOCK,
+				 0xff, priv->dacmax_register);
+	if (ret < 0)
+		return ret;
 
-	regmap_update_bits(priv->regmap, DACMAX_CLOCK,
-			 0xff, priv->dacmax_register);
 
-	regmap_update_bits(priv->regmap, PCM179X_SOFT_MUTE,
-			 PCM179X_MUTE_MASK, priv->is_mute & (!saved_value));
+	ret = regmap_update_bits(priv->regmap, PCM179X_FMT_CONTROL,
+				 priv->dacmax_mask,
+				 ucontrol->value.integer.value[0] ? 0xd0 : priv->dacmax_format);
+	if (ret < 0)
+		return ret;
+
+	ret = regmap_update_bits(priv->regmap, PCM179X_CONF_CONTROL,
+				 PCM179X_DSD_ENABLE,
+				 ucontrol->value.integer.value[0] ? 0 : dsd);
+
+	if (ret < 0)
+		return ret;
+
+	ret = regmap_update_bits(priv->regmap, PCM179X_SOFT_MUTE,
+				 PCM179X_MUTE_MASK,
+				 ucontrol->value.integer.value[0] ? 0 : !!priv->is_mute);
+	if (ret < 0)
+		return ret;
+
+
 	return 1;
 }
 
