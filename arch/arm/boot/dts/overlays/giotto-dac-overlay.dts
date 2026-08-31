@@ -37,6 +37,7 @@
 		__overlay__ {
 			compatible = "bcm2708,bcm2708-audio-giotto";
 			i2s-controller = <&i2s>;
+			io-channels = <&volume 0>, <&volume 1>;
 			nreset = <&gpio 5 1>;
 			status = "okay";
 		};
@@ -56,16 +57,11 @@
 			#size-cells = <0>;
 			status = "okay";
 
-			ds1807@28 {
+			volume: ds1807@28 {
 				compatible = "maxim,ds1807";
 				reg = <0x28>;
 				status = "okay";
-			};
-
-			ds1807@29 {
-				compatible = "maxim,ds1807";
-				reg = <0x29>;
-				status = "okay";
+				#io-channel-cells = <1>;
 			};
 		};
 	};
