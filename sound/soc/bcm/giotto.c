@@ -83,12 +83,14 @@ static int giotto_ext_clock_update(struct giotto_data *data,
 		mask |= (CLK2 | CLK0 | CLK1);
 		break;
 	case 352800:
-		/* This rate works only for DSD format */
+		mask |= CLK2;
+	case 705600:
+		mask |= CLK1;
+		/* These rates work only for DSD format */
 		if (params_format(params) !=
 		    SNDRV_PCM_FORMAT_DSD_U16_LE)
 			return -EINVAL;
 
-		mask |= (CLK2 | CLK1);
 		mask |= W32;
 		break;
 	default:
