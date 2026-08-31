@@ -92,8 +92,7 @@ static const struct iio_info ds1807_info = {
 	.write_raw = ds1807_write_raw,
 };
 
-static int ds1807_probe(struct i2c_client *client,
-			 const struct i2c_device_id *id)
+static int ds1807_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
 	struct ds1807_data *data;
