@@ -84,6 +84,7 @@ static int giotto_ext_clock_update(struct giotto_data *data,
 		break;
 	case 352800:
 		mask |= CLK2;
+		fallthrough;
 	case 705600:
 		mask |= CLK1;
 		/* These rates work only for DSD format */
@@ -189,7 +190,7 @@ static struct snd_soc_dai_link giotto_dai = {
 	.name = "GIOTTO-I2S",
 	.stream_name = "GIOTTO-Audio",
 	.dai_fmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_NF |
-		   SND_SOC_DAIFMT_CBM_CFM,
+		   SND_SOC_DAIFMT_CBP_CFC,
 	.ops = &giotto_ops,
 	.init = giotto_dai_init,
 	SND_SOC_DAILINK_REG(giotto),
@@ -267,11 +268,6 @@ fail:
 	return ret;
 }
 
-static int giotto_remove(struct platform_device *pdev)
-{
-	return 0;
-}
-
 static const struct of_device_id giotto_dt_ids[] = {
 	{ .compatible = "bcm2708,bcm2708-audio-giotto", },
 	{ /* sentinel */ }
@@ -285,7 +281,6 @@ static struct platform_driver giotto_driver = {
 		.of_match_table = giotto_dt_ids,
 	},
 	.probe = giotto_probe,
-	.remove = giotto_remove,
 };
 module_platform_driver(giotto_driver);
 
