@@ -84,10 +84,85 @@ struct pcm179x_private {
 	unsigned int dacmax_register;
 	unsigned int dacmax_format;
 	unsigned int dacmax_mask;
+	enum pcm179x_type codec_model;
 };
 
+struct pcm179x_fmt {
+	unsigned int fmt;	/* SND_SOC_DAIFMT_* */
+	unsigned int width;	/* sample width in bits */
+	unsigned int code;	/* FMT[2:0] */
+};
+
+/*
+ * Register 18 FMT[2:0] is not encoded the same way by every model: code 001
+ * and code 100 are 20-bit and 16-bit I2S on the PCM1792A/PCM1796 but 32-bit
+ * and 32-bit I2S on the PCM1795, and neither model has a 32-bit
+ * left-justified mode.
+ *
+ * The PCM1792A/PCM1796 have no 32-bit format at all, so a 32-bit container
+ * keeps the 24-bit code and is clocked out as 24-bit data, as this driver has
+ * always done. Only the PCM1795 has real 32-bit formats.
+ */
+static const struct pcm179x_fmt pcm1792a_fmt[] = {
+	{ SND_SOC_DAIFMT_RIGHT_J, 16, 0 },
+	{ SND_SOC_DAIFMT_RIGHT_J, 24, 2 },
+	{ SND_SOC_DAIFMT_RIGHT_J, 32, 2 },
+	{ SND_SOC_DAIFMT_LEFT_J,  24, 3 },
+	{ SND_SOC_DAIFMT_LEFT_J,  32, 3 },
+	{ SND_SOC_DAIFMT_I2S,     16, 4 },
+	{ SND_SOC_DAIFMT_I2S,     24, 5 },
+	{ SND_SOC_DAIFMT_I2S,     32, 5 },
+};
+
+static const struct pcm179x_fmt pcm1795_fmt[] = {
+	{ SND_SOC_DAIFMT_RIGHT_J, 16, 0 },
+	{ SND_SOC_DAIFMT_RIGHT_J, 24, 2 },
+	{ SND_SOC_DAIFMT_RIGHT_J, 32, 1 },
+	{ SND_SOC_DAIFMT_LEFT_J,  24, 3 },
+	{ SND_SOC_DAIFMT_I2S,     24, 5 },
+	{ SND_SOC_DAIFMT_I2S,     32, 4 },
+};
+
+struct pcm179x_model {
+	u64 formats;
+	const struct pcm179x_fmt *fmt;
+	unsigned int num_fmt;
+};
+
+static const struct pcm179x_model pcm179x_models[] = {
+	[PCM1792A] = { PCM1792A_FORMATS, pcm1792a_fmt, ARRAY_SIZE(pcm1792a_fmt) },
+	[PCM1795] = { PCM1795_FORMATS, pcm1795_fmt, ARRAY_SIZE(pcm1795_fmt) },
+	[PCM1796] = { PCM1792A_FORMATS, pcm1792a_fmt, ARRAY_SIZE(pcm1792a_fmt) },
+};
+
+static int pcm179x_fmt_value(struct pcm179x_private *priv, unsigned int fmt,
+			     unsigned int width)
+{
+	const struct pcm179x_model *model = &pcm179x_models[priv->codec_model];
+	const struct pcm179x_fmt *fmt_tbl = model->fmt;
+
+	for (unsigned int i = 0; i < model->num_fmt; i++)
+		if (fmt_tbl[i].fmt == fmt && fmt_tbl[i].width == width)
+			return fmt_tbl[i].code;
+
+	return -EINVAL;
+}
+
+static int pcm179x_startup(struct snd_pcm_substream *substream,
+			   struct snd_soc_dai *dai)
+{
+	struct snd_soc_component *component = dai->component;
+	struct pcm179x_private *priv = snd_soc_component_get_drvdata(component);
+	u64 formats = pcm179x_models[priv->codec_model].formats;
+
+	snd_pcm_hw_constraint_mask64(substream->runtime,
+				     SNDRV_PCM_HW_PARAM_FORMAT, formats);
+
+	return 0;
+}
+
 static int pcm179x_set_dai_fmt(struct snd_soc_dai *codec_dai,
-			       unsigned int format)
+                             unsigned int format)
 {
 	struct snd_soc_component *component = codec_dai->component;
 	struct pcm179x_private *priv = snd_soc_component_get_drvdata(component);
@@ -130,98 +205,18 @@ static int pcm179x_hw_params(struct snd_pcm_substream *substream,
 {
 	struct snd_soc_component *component = dai->component;
 	struct pcm179x_private *priv = snd_soc_component_get_drvdata(component);
-	unsigned int val = 0;
+	int val, ret;
 	unsigned int dsd = 0;
 	unsigned int mask = PCM179X_FMT_MASK | PCM179X_ATLD_ENABLE;
-	int ret;
 	int spdif_enable;
 
 	priv->rate = params_rate(params);
 
-	switch (priv->rate) {
-	case 44100:
-		break;
-	case 48000:
-		val |= CLK0;
-		break;
-	case 88200:
-		val |= CLK1;
-		break;
-	case 96000:
-		val |= (CLK1 | CLK0);
-		break;
-	case 176400:
-		val |= (CLK2 | CLK1);
-		break;
-	case 192000:
-		val |= (CLK2 | CLK0 | CLK1);
-		break;
-	case 352800:
-		val |= CLK2;
-	case 705600:
-		val |= CLK1;
-		/* These rates work only for DSD format */
-		if (params_format(params) != SNDRV_PCM_FORMAT_DSD_U16_LE)
-			return -EINVAL;
-
-		val |= W32;
-		break;
-	default:
-		return -EINVAL;
-	}
-
-	switch (params_format(params)) {
-	case SNDRV_PCM_FORMAT_DSD_U16_LE:
-		val |= DSD_EN;
-		break;
-	case SNDRV_PCM_FORMAT_S16_LE:
-		break;
-	case SNDRV_PCM_FORMAT_S24_LE:
-	case SNDRV_PCM_FORMAT_S32_LE:
-		val |= W32;
-		break;
-	}
-
-	priv->dacmax_register &= (SPDIF_IN | SPDIF_SEL);
-	priv->dacmax_register |= val;
-
-	spdif_enable = !!(priv->dacmax_register & SPDIF_IN);
-
-	ret = regmap_update_bits(priv->regmap, DACMAX_CLOCK,
-				 0xff, priv->dacmax_register);
-	if (ret < 0)
-		return ret;
-
-	switch (priv->format & SND_SOC_DAIFMT_FORMAT_MASK) {
-	case SND_SOC_DAIFMT_RIGHT_J:
-		switch (params_width(params)) {
-		case 24:
-		case 32:
-			val = 2;
-			break;
-		case 16:
-			val = 0;
-			break;
-		default:
-			return -EINVAL;
-		}
-		break;
-	case SND_SOC_DAIFMT_I2S:
-		switch (params_width(params)) {
-		case 24:
-		case 32:
-			val = 5;
-			break;
-		case 16:
-			val = 4;
-			break;
-		default:
-			return -EINVAL;
-		}
-		break;
-	default:
+	val = pcm179x_fmt_value(priv, priv->format & SND_SOC_DAIFMT_FORMAT_MASK,
+				params_width(params));
+	if (val < 0) {
 		dev_err(component->dev, "Invalid DAI format\n");
-		return -EINVAL;
+		return val;
 	}
 
 	val = val << PCM179X_FMT_SHIFT | PCM179X_ATLD_ENABLE;
@@ -258,6 +253,7 @@ static int pcm179x_hw_params(struct snd_pcm_substream *substream,
 }
 
 static const struct snd_soc_dai_ops pcm179x_dai_ops = {
+	.startup	= pcm179x_startup,
 	.set_fmt	= pcm179x_set_dai_fmt,
 	.hw_params	= pcm179x_hw_params,
 	.mute_stream	= pcm179x_mute,
@@ -383,7 +379,7 @@ static struct snd_soc_dai_driver pcm179x_dai = {
 		.rates = SNDRV_PCM_RATE_CONTINUOUS,
 		.rate_min = 10000,
 		.rate_max = 705600,
-		.formats = PCM1792A_FORMATS, },
+		.formats = PCM179X_FORMATS, },
 	.ops = &pcm179x_dai_ops,
 };
 
@@ -419,6 +415,8 @@ int pcm179x_common_init(struct device *dev, struct regmap *regmap)
 	if (!pcm179x)
 		return -ENOMEM;
 
+	pcm179x->codec_model =
+		(enum pcm179x_type)(uintptr_t)device_get_match_data(dev);
 	pcm179x->regmap = regmap;
 	pcm179x->is_mute = 1;
 	dev_set_drvdata(dev, pcm179x);
