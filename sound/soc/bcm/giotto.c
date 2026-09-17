@@ -190,7 +190,7 @@ static struct snd_soc_dai_link giotto_dai = {
 	.name = "GIOTTO-I2S",
 	.stream_name = "GIOTTO-Audio",
 	.dai_fmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_NF |
-		   SND_SOC_DAIFMT_CBP_CFC,
+		   SND_SOC_DAIFMT_CBP_CFP,
 	.ops = &giotto_ops,
 	.init = giotto_dai_init,
 	SND_SOC_DAILINK_REG(giotto),
