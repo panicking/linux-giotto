@@ -24,7 +24,7 @@
 
 			giotto-codec@0 {
 				#sound-dai-cells = <0>;
-				compatible = "ti,pcm1792a";
+				compatible = "ti,pcm1795";
 				reg = <0>;
 				spi-max-frequency = <60000>;
 				status = "okay";
