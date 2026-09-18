@@ -212,6 +212,61 @@ static int pcm179x_hw_params(struct snd_pcm_substream *substream,
 
 	priv->rate = params_rate(params);
 
+	switch (priv->rate) {
+	case 44100:
+		break;
+	case 48000:
+		val |= CLK0;
+		break;
+	case 88200:
+		val |= CLK1;
+		break;
+	case 96000:
+		val |= (CLK1 | CLK0);
+		break;
+	case 176400:
+		val |= (CLK2 | CLK1);
+		break;
+	case 192000:
+		val |= (CLK2 | CLK0 | CLK1);
+		break;
+	case 352800:
+		val |= CLK2;
+		fallthrough;
+	case 705600:
+		val |= CLK1;
+		/* These rates work only for DSD format */
+		if (params_format(params) != SNDRV_PCM_FORMAT_DSD_U16_LE)
+			return -EINVAL;
+
+		val |= W32;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	switch (params_format(params)) {
+	case SNDRV_PCM_FORMAT_DSD_U16_LE:
+		val |= DSD_EN;
+		break;
+	case SNDRV_PCM_FORMAT_S16_LE:
+		break;
+	case SNDRV_PCM_FORMAT_S24_LE:
+	case SNDRV_PCM_FORMAT_S32_LE:
+		val |= W32;
+		break;
+	}
+
+	priv->dacmax_register &= (SPDIF_IN | SPDIF_SEL);
+	priv->dacmax_register |= val;
+
+	spdif_enable = !!(priv->dacmax_register & SPDIF_IN);
+
+	ret = regmap_update_bits(priv->regmap, DACMAX_CLOCK,
+				 0xff, priv->dacmax_register);
+	if (ret < 0)
+		return ret;
+
 	val = pcm179x_fmt_value(priv, priv->format & SND_SOC_DAIFMT_FORMAT_MASK,
 				params_width(params));
 	if (val < 0) {
